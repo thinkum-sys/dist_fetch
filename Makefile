@@ -6,6 +6,12 @@ TARGET_ARCH?=	${:! uname -p !}
 
 DESTDIR?=	# Empty
 
+
+.ifndef CACHEROOT
+CACHEROOT:=	${.CURDIR}/distcache
+.endif
+
+
 ## source directory to use when managing etcupdate
 ## during an upgrade installation. This may be
 ## provided as a subdirectory of DESTDIR
@@ -51,10 +57,6 @@ FETCH_PKG+=	tests
 
 .ifdef DEBUG
 FETCH_PKG:=	${FETCH_PKG} ${FETCH_PKG:Nsrc:Nports:Ntests:@.P.@${.P.}-dbg@}
-.endif
-
-.ifndef CACHEROOT
-CACHEROOT:=	${.CURDIR}
 .endif
 
 FETCH_META?=	MANIFEST REVISION GITBRANCH BUILDDATE
