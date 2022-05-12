@@ -158,7 +158,7 @@ ${CACHE_PKGDIR}:
 ALL_FETCH_META+=		${CACHE_PKGDIR}/${F}
 ${CACHE_PKGDIR}/${F}: 		${CACHE_PKGDIR} .PRECIOUS
 . ifndef NO_FETCH
-	chmod +w ${.TARGET}
+	if [ -e ${.TARGET} ]; then chmod +w ${.TARGET}; fi
 	wget -O ${.TARGET} -c ${FETCH_BASE}/${F}
 	chmod -w ${.TARGET}
 . endif
@@ -169,7 +169,7 @@ ALL_FETCH+=			${ALL_FETCH_META}
 ALL_FETCH+=			${CACHE_PKGDIR}/${P}.txz
 ${CACHE_PKGDIR}/${P}.txz: 	${ALL_FETCH_META} ${CACHE_PKGDIR} .PRECIOUS
 . ifndef NO_FETCH
-	chmod +w ${.TARGET}
+	if [ -e ${.TARGET} ]; then chmod +w ${.TARGET}; fi
 	wget -O ${.TARGET} -c ${FETCH_BASE}/${P}.txz
 	chmod -w ${.TARGET}
 . endif
