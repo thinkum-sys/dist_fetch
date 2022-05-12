@@ -1,6 +1,6 @@
 ## dist_fetch
 #
-# Copyright (c) 2022 Sean Champ Selasky. All rights reserved.
+# Copyright (c) 2022 Sean Champ. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
