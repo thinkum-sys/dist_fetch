@@ -104,6 +104,24 @@ SU_RUN=		# Empty
 SU_RUN=		${SUDO:Usudo}
 .endif
 
+.if !defined(STAMPDIR)
+STAMPDIR:=	${.CURDIR}
+.endif
+
+##
+## using build-stamp file for ensuring that generally .EXEC tgts
+## will not be run under every make, if completed successfully
+## in some previous run.
+##
+## this is not supported for the instalt tgt
+##
+STAMP_TGTS=	fetch check unpack-src etcupdate-post
+.for T in ${STAMP_TGTS}
+STAMP.${T}:=	${STAMPDIR}/.mk-stamp.${T}
+${T}: .PHONY ${STAMP.${T}}
+STAMPS+=	${STAMP.${T}}
+.endfor
+
 ##
 ## Configuration for install
 ##
@@ -177,17 +195,24 @@ FETCH_PKG+=	tests
 FETCH_PKG:=	${FETCH_PKG} ${FETCH_PKG:Nsrc:Nports:Ntests:@.P.@${.P.}-dbg@}
 .endif
 
-
 .for P in ${FETCH_PKG}
-ARCHIVE_PATH.${P}?= ${CACHE_PKGDIR}/${P}.txz
+ARCHIVE_PATH.${P}?=	${CACHE_PKGDIR}/${P}.txz
+FETCH_ORIGIN.${P}?=	${FETCH_BASE}/${P}.txz
 .endfor
-
 
 FETCH_META?=	MANIFEST REVISION GITBRANCH BUILDDATE
 
-all: .PHONY fetch
+.for F in ${FETCH_META}
+ARCHIVE_PATH.${F}?=	${CACHE_PKGDIR}/${F}
+FETCH_ORIGIN.${F}?=	${FETCH_BASE}/${F}
+.endfor
+
+
+all: .PHONY ${STAMP.fetch}
 
 clean: clean-src
+	rm -f ${STAMPS}
+
 realclean: clean clean-cache
 
 ##
@@ -197,30 +222,31 @@ realclean: clean clean-cache
 ${CACHE_PKGDIR}:
 	mkdir -p ${.TARGET}
 
-.for F in ${FETCH_META}
-ALL_FETCH_META+=		${CACHE_PKGDIR}/${F}
-${CACHE_PKGDIR}/${F}: 		${CACHE_PKGDIR} .PRECIOUS
-. ifndef NO_FETCH
-	if [ -e ${.TARGET} ]; then chmod +w ${.TARGET}; fi
-	wget -O ${.TARGET} -c ${FETCH_BASE}/${F}
-	chmod -w ${.TARGET}
-. endif
-.endfor
-ALL_FETCH+=			${ALL_FETCH_META}
-
 .for P in ${FETCH_PKG}
-ALL_FETCH+=			${CACHE_PKGDIR}/${P}.txz
-${CACHE_PKGDIR}/${P}.txz: 	${ALL_FETCH_META} ${CACHE_PKGDIR} .PRECIOUS
+ALL_FETCH+=		${ARCHIVE_PATH.${P}}
+${ARCHIVE_PATH.${P}}: 	${ALL_FETCH_META} ${CACHE_PKGDIR} .PRECIOUS
 . ifndef NO_FETCH
-	if [ -e ${.TARGET} ]; then chmod +w ${.TARGET}; fi
-	wget -O ${.TARGET} -c ${FETCH_BASE}/${P}.txz
-	chmod -w ${.TARGET}
+	if [ -e $@ ]; then chmod +w $@; fi
+	wget -O $@ -c ${FETCH_ORIGIN.${P}}
+	chmod -w $@
 . endif
 .endfor
 
-fetch:		.PHONY ${ALL_FETCH}
+.for F in ${FETCH_META}
+all_FETCH_META+=	${ARCHIVE_PATH.${F}}
+${ARCHIVE_PATH.${F}}: 	${CACHE_PKGDIR} .PRECIOUS
+. ifndef NO_FETCH
+	if [ -e $@ ]; then chmod +w $@; fi
+	wget -O $@ -c ${FETCH_ORIGIN.${F}}
+	chmod -w $@
+. endif
+.endfor
+ALL_FETCH+=		${ALL_FETCH_META}
 
-check:		.PHONY ${ALL_FETCH}
+${STAMP.fetch}:		${ALL_FETCH}
+	@touch $@
+
+${STAMP.check}: 	${ALL_FETCH}
 .for P in ${FETCH_PKG}
 	@(if ! [ -e "${ARCHIVE_PATH.${P}}" ]; then echo "File not found (make fetch?): ${ARCHIVE_PATH.${P}}"; false; fi)
 	@echo "#-- Checking ${P}.txz checksum" 1>&2
@@ -229,8 +255,9 @@ check:		.PHONY ${ALL_FETCH}
 		END { if (EX != 0) { print "${P}.txz not found in manifest ${CACHE_PKGDIR}/MANIFEST"; exit 1; }}' ${CACHE_PKGDIR}/MANIFEST); \
 		${DISTSUM} -c "$${ORIGSUM}" ${ARCHIVE_PATH.${P}} >/dev/null )
 .endfor
+	@touch $@
 
-clean-cache: .PHONY clean-src
+clean-cache: 		.PHONY clean-src
 	if [ -e "${CACHE_PKGDIR}" ]; then \
 	  echo "#-- Removing distribution files in ${CACHE_PKGDIR}" 1>&2; \
 	  rm -f ${FETCH_PKG:@P@${CACHE_PKGDIR}/${P}.txz@}; \
@@ -246,10 +273,11 @@ clean-cache: .PHONY clean-src
 ${SRC_DESTDIR}:
 	mkdir -p ${.TARGET}
 
-unpack-src:	.PHONY ${SRC_DESTDIR} ${CACHE_PKGDIR}/src.txz
+${STAMP.unpack-src}:	${STAMP.check} ${SRC_DESTDIR} ${CACHE_PKGDIR}/src.txz
 	tar -C ${SRC_DESTDIR} -Jxf ${CACHE_PKGDIR}/src.txz
+	@touch $@
 
-clean-src:	.PHONY
+clean-src:		.PHONY
 	@echo "#-- Removing local source directory ${SRC_DESTDIR}" 1>&2
 	rm -rf ${SRC_DESTDIR}
 
@@ -257,7 +285,7 @@ clean-src:	.PHONY
 ## to build etcupdate.tar.gz while it will be run for install
 ## on the actual unpacked src.txz
 ## - FIXME src.txz no longer required here, if etcupdate.tar.gz and old.inc are available
-${CACHE_PKGDIR}/etcupdate.tar.gz: unpack-src ## FIXME use build stamps to prevent repetitive untgz
+${CACHE_PKGDIR}/etcupdate.tar.gz: ${STAMP.unpack-src}
 	WRK=$$(mktemp -d ${TMPDIR:U/tmp}/etcupdate_wrk.${.MAKE.PID}XXXXXX.d); \
 	${SU_RUN} ${ETCUPDATE} build -d $${WRK} -s ${SRC_DESTDIR}/usr/src $@; \
 	rm -f $${WRK}/log; rmdir $${WRK}
@@ -275,7 +303,7 @@ ${CACHE_PKGDIR}/etcupdate.files: ${CACHE_PKGDIR}/etcupdate.tar.gz
 ##
 ## The mk-source variables would be bound for some specific make tgts
 ## in SRCTOP/Makefile.inc1
-${CACHE_PKGDIR}/old.inc: unpack-src
+${CACHE_PKGDIR}/old.inc: ${STAMP.unpack-src}
 	${MAKE} -C ${SRC_DESTDIR}/usr/src -f ${SRC_DESTDIR}/usr/src/Makefile.inc1 \
 		-V 'OLD_DIRS=$${OLD_DIRS:Q}' -V 'OLD_FILES=$${OLD_FILES:Q}' \
 		-V 'OLD_LIBS=$${OLD_LIBS:Q}' \
@@ -291,7 +319,7 @@ INSTALL_UPDATE=	Defined
 ## updating an existing installation with a new base.txz (post-install only)
 ##
 ## this will be run at the end of make install
-etcupdate-post: .PHONY unpack-src .USE
+${STAMP.etcupdate-post}: ${STAMP.unpack-src} .USE
 ## run twice if it fails initially, in post-update.
 ## terminate with || true on the first call.
 	${SU_RUN} ${ETCUPDATE} ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src || \
@@ -300,13 +328,13 @@ etcupdate-post: .PHONY unpack-src .USE
 . else
 ## assumption: This is a new installation, with no libc under destdir.
 ## no config check; etcupdte extract in post
-etcupdate-post: .PHONY unpack-src .USE
+${STAMP.etcupdate-post}: ${STAMP.unpack-src} .USE
 	${SU_RUN} etcupdate extract -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src
 . endif
 .endif
 
 
-install: .PHONY check ${DESTDIR_DIR} etcupdate-post ${CACHE_PKGDIR}/old.inc ${CACHE_PKGDIR}/etcupdate.files
+install: .PHONY check ${DESTDIR_DIR} ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${CACHE_PKGDIR}/etcupdate.files
 ## clear known fflags on dirs, if base.txz will be installed
 .if !empty(FETCH_PKG:Mbase) && defined(INSTALL_UPDATE)
 . for D in ${SCHG_DIRS}

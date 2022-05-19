@@ -4,3 +4,4 @@
 *.bak
 *.log
 /distcache
+.mk-stamp.*
