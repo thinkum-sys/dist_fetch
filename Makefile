@@ -333,17 +333,25 @@ ${STAMP.etcupdate-post}: ${STAMP.unpack-src} .USE
 . endif
 .endif
 
+.if defined(INSTALL_UPDATE)
+## ensure that the skip list will be created and used for base.txz extract
+## only when installing an update
+EXTRACT_SKIP_LIST?=		${CACHE_PKGDIR}/etcupdate.files
+.endif
 
-install: .PHONY check ${DESTDIR_DIR} ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${CACHE_PKGDIR}/etcupdate.files
+
+install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_SKIP_LIST}
 ## clear known fflags on dirs, if base.txz will be installed
-.if !empty(FETCH_PKG:Mbase) && defined(INSTALL_UPDATE)
-. for D in ${SCHG_DIRS}
+.if !empty(FETCH_PKG:Mbase)
+. if defined(INSTALL_UPDATE)
+.  for D in ${SCHG_DIRS}
 	if [ -e ${DESTDIR_DIR}${D} ]; then ${SU_RUN} chflags noschg ${DESTDIR_DIR}${D}; fi
-. endfor
+.  endfor
+. endif
 ## extract base.txz
 	@echo "#-- installing base system" 1>&2
 	${SU_RUN} tar -C ${DESTDIR_DIR}  --clear-nochange-fflags --fflags \
-		 -Jxf ${ARCHIVE_PATH.base} -X ${CACHE_PKGDIR}/etcupdate.files
+		 -Jxf ${ARCHIVE_PATH.base} ${INSTALL_UPDATE:D-X ${EXTRACT_SKIP_LIST}}
 .endif
 ## extract *.txz other than base, src (i.e kernel, lib32, ports, test)
 .for P in ${FETCH_PKG:Nsrc:Nbase}
@@ -362,33 +370,36 @@ install: .PHONY check ${DESTDIR_DIR} ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old
 ## etcupdate will be run after make install complete
 .if !empty(FETCH_PKG:Mbase)
 ## set all fflags, file permissions, times per mtree metadata as installed
-	echo "#-- mtree : var/db/mergemaster.mtree" 1>&2
+##
+## mtree data is generally handled by etcupdate, so will be skipped during base.txz extract.
+## The files may not be avaialble her for a new installation
+. if defined(INSTALL_UPDATE)
+	@echo "#-- mtree : var/db/mergemaster.mtree" 1>&2
 	${SU_RUN} mtree -iUte -p ${DESTDIR_DIR} -f ${DESTDIR_DIR}var/db/mergemaster.mtree
-	for DIRTREE in ${DESTDIR_DIR}etc/mtree/BSD.*.dist; do \
+	@(for DIRTREE in ${DESTDIR_DIR}etc/mtree/BSD.*.dist; do \
 		NAME=$$(basename $${DIRTREE} | sed 's@.*\.\(.*\)\..*@\1@'); \
 		case $${NAME} in (root|sendmail) REALDIR= ;; (lib32|include) REALDIR=usr;; \
 		(debug) if ! ${DEBUG:Dtrue:Ufalse}; then continue; else REALDIR=usr/lib; fi;; \
 		(tests) REALDIR=usr/tests;; (*) REALDIR=$${NAME};; esac; \
 		if [ -e ${DESTDIR_DIR}${REALDIR} ]; then echo "#-- mtree : $${NAME} @ $${REALDIR}"; \
 		${SU_RUN} mtree -iUte -p ${DESTDIR_DIR}${REALDIR} -f $${DIRTREE}; fi; \
-	done
-. if defined(INSTALL_UPDATE)
+	done)
 ## clean old files/libs and old dirs, using metadata from the corresponding source tree
-	echo "#-- cleaning old files/libs in ${DESTDIR_DIR}" 1>&2
-	. ${CACHE_PKGDIR}/old.inc; \
+	@echo "#-- cleaning old files/libs in ${DESTDIR_DIR}" 1>&2
+	@(. ${CACHE_PKGDIR}/old.inc; \
 	for F in $${OLD_FILES} $${OLD_LIBS}; do \
 	if test -e ${DESTDIR_DIR}$${F}; then \
 	  ${SU_RUN} chflags noschg ${DESTDIR_DIR}$${F} || echo "#-- (chflags exited $$?) unable to modify file flags: ${DESTDIR_DIR}$${F}" 1>&2; \
 	  ${SU_RUN} rm -fv ${DESTDIR_DIR}$${F} || echo "#-- (rm exited $$?) unable to remove file: ${DESTDIR_DIR}$${F}" 1>&2; \
-	fi; done
-	echo "#-- cleaning old dirs in ${DESTDIR_DIR}" 1>&2; \
-	. ${CACHE_PKGDIR}/old.inc; \
+	fi; done)
+	@echo "#-- cleaning old dirs in ${DESTDIR_DIR}" 1>&2; \
+	@(. ${CACHE_PKGDIR}/old.inc; \
 	for D in $${OLD_DIRS}; do \
 	if [ -d ${DESTDIR_DIR}$${D} ]; then \
 	  if [ $$(stat -f '%l' ${DESTDIR_DIR}$${D}) -le 2 ]; then \
 		  ${SU_RUN} chflags noschg ${DESTDIR_DIR}$${D} || echo "#-- (chflags exited $$?) unable to modify dir flags: ${DESTDIR_DIR}$${D}" 1>&2; \
 		  ${SU_RUN} rmdir -v ${DESTDIR_DIR}$${D} || echo "#-- (rmdir exited $$?) rmdir failed: ${DESTDIR_DIR}$${D}" 1>&2; \
 	  else echo "#--- directory not empty, not removing: ${DESTDIR_DIR}$${D}" 1>&2; \
-	fi; fi; done
+	fi; fi; done)
 . endif
 .endif
