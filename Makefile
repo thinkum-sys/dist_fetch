@@ -195,6 +195,8 @@ FETCH_PKG+=	tests
 FETCH_PKG:=	${FETCH_PKG} ${FETCH_PKG:Nsrc:Nports:Ntests:@.P.@${.P.}-dbg@}
 .endif
 
+ETCUPDATE_ARCHIVE?=	${CACHE_PKGDIR}/etcupdate.tar.gz
+
 .for P in ${FETCH_PKG}
 ARCHIVE_PATH.${P}?=	${CACHE_PKGDIR}/${P}.txz
 FETCH_ORIGIN.${P}?=	${FETCH_BASE}/${P}.txz
@@ -248,7 +250,7 @@ ${STAMP.fetch}:		${ALL_FETCH}
 
 ${STAMP.check}: 	${ALL_FETCH}
 .for P in ${FETCH_PKG}
-	@(if ! [ -e "${ARCHIVE_PATH.${P}}" ]; then echo "File not found (make fetch?): ${ARCHIVE_PATH.${P}}"; false; fi)
+	@(if ! [ -e "${ARCHIVE_PATH.${P}}" ]; then echo "File not found (make fetch?): ${ARCHIVE_PATH.${P}}" 1>&2; false; fi)
 	@echo "#-- Checking ${P}.txz checksum" 1>&2
 	@(set -e; ORIGSUM=$$(awk 'BEGIN {EX = 1} \
 		$$1 == "${P}.txz" { print $$2; EX=0} \
@@ -285,7 +287,7 @@ clean-src:		.PHONY
 ## to build etcupdate.tar.gz while it will be run for install
 ## on the actual unpacked src.txz
 ## - FIXME src.txz no longer required here, if etcupdate.tar.gz and old.inc are available
-${CACHE_PKGDIR}/etcupdate.tar.gz: ${STAMP.unpack-src}
+${ETCUPDATE_ARCHIVE}: ${STAMP.unpack-src}
 	WRK=$$(mktemp -d ${TMPDIR:U/tmp}/etcupdate_wrk.${.MAKE.PID}XXXXXX.d); \
 	${SU_RUN} ${ETCUPDATE} build -d $${WRK} -s ${SRC_DESTDIR}/usr/src $@; \
 	rm -f $${WRK}/log; rmdir $${WRK}
@@ -293,8 +295,8 @@ ${CACHE_PKGDIR}/etcupdate.tar.gz: ${STAMP.unpack-src}
 ## Produce a list of files to exclude when extracting base.txz,
 ## thus preventing overwrite of ${DESTDIR}/etc/master.passwd if the file exists.
 ## This is used together with etcupdate after install
-${CACHE_PKGDIR}/etcupdate.files: ${CACHE_PKGDIR}/etcupdate.tar.gz
-	tar -tf ${CACHE_PKGDIR}/etcupdate.tar.gz | grep -v '/$$' > $@
+${CACHE_PKGDIR}/etcupdate.files: ${ETCUPDATE_ARCHIVE}
+	tar -tf ${ETCUPDATE_ARCHIVE} | grep -v '/$$' > $@
 
 ## OLD_(DIRS, LIBS, FILES)
 ##
@@ -319,17 +321,17 @@ INSTALL_UPDATE=	Defined
 ## updating an existing installation with a new base.txz (post-install only)
 ##
 ## this will be run at the end of make install
-${STAMP.etcupdate-post}: ${STAMP.unpack-src} .USE
+${STAMP.etcupdate-post}: ${ETCUPDATE_ARCHIVE} .USE
 ## run twice if it fails initially, in post-update.
 ## terminate with || true on the first call.
-	${SU_RUN} ${ETCUPDATE} ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src || \
-	${SU_RUN} ${ETCUPDATE} resolve ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src || true
-	${SU_RUN} ${ETCUPDATE} resolve ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src
+	${SU_RUN} ${ETCUPDATE} ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR} -t ${ETCUPDATE_ARCHIVE} || \
+	${SU_RUN} ${ETCUPDATE} resolve ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR} || true
+	${SU_RUN} ${ETCUPDATE} resolve ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR}
 . else
 ## assumption: This is a new installation, with no libc under destdir.
 ## no config check; etcupdte extract in post
-${STAMP.etcupdate-post}: ${STAMP.unpack-src} .USE
-	${SU_RUN} etcupdate extract -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src
+${STAMP.etcupdate-post}: ${ETCUPDATE_ARCHIVE} .USE
+	${SU_RUN} etcupdate extract -D ${DESTDIR_DIR} -t ${ETCUPDATE_ARCHIVE}
 . endif
 .endif
 
@@ -381,7 +383,7 @@ install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_
 		case $${NAME} in (root|sendmail) REALDIR= ;; (lib32|include) REALDIR=usr;; \
 		(debug) if ! ${DEBUG:Dtrue:Ufalse}; then continue; else REALDIR=usr/lib; fi;; \
 		(tests) REALDIR=usr/tests;; (*) REALDIR=$${NAME};; esac; \
-		if [ -e ${DESTDIR_DIR}${REALDIR} ]; then echo "#-- mtree : $${NAME} @ $${REALDIR}"; \
+		if [ -e ${DESTDIR_DIR}${REALDIR} ]; then echo "#-- mtree : $${NAME} $${REALDIR}"; \
 		${SU_RUN} mtree -iUte -p ${DESTDIR_DIR}${REALDIR} -f $${DIRTREE}; fi; \
 	done)
 ## clean old files/libs and old dirs, using metadata from the corresponding source tree
@@ -392,7 +394,7 @@ install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_
 	  ${SU_RUN} chflags noschg ${DESTDIR_DIR}$${F} || echo "#-- (chflags exited $$?) unable to modify file flags: ${DESTDIR_DIR}$${F}" 1>&2; \
 	  ${SU_RUN} rm -fv ${DESTDIR_DIR}$${F} || echo "#-- (rm exited $$?) unable to remove file: ${DESTDIR_DIR}$${F}" 1>&2; \
 	fi; done)
-	@echo "#-- cleaning old dirs in ${DESTDIR_DIR}" 1>&2; \
+	@echo "#-- cleaning old dirs in ${DESTDIR_DIR}" 1>&2
 	@(. ${CACHE_PKGDIR}/old.inc; \
 	for D in $${OLD_DIRS}; do \
 	if [ -d ${DESTDIR_DIR}$${D} ]; then \
@@ -401,5 +403,6 @@ install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_
 		  ${SU_RUN} rmdir -v ${DESTDIR_DIR}$${D} || echo "#-- (rmdir exited $$?) rmdir failed: ${DESTDIR_DIR}$${D}" 1>&2; \
 	  else echo "#--- directory not empty, not removing: ${DESTDIR_DIR}$${D}" 1>&2; \
 	fi; fi; done)
+	@echo "#-- installed to ${DESTDIR_DIR}" 1>&2
 . endif
 .endif
