@@ -24,6 +24,14 @@
 # SUCH DAMAGE.
 #
 
+
+## Remarks
+##
+## - This is not recommended for updating any installation on the
+##   root filesystenm of a live system.
+##
+## - See also: bectl and ZFS, bsdinstall, removable media
+
 ##
 ## release name for fetch from distribution site
 ##
@@ -38,9 +46,9 @@ MIRROR?=	https://download.freebsd.org
 ##
 ## arch and optional target arch for fetch
 ##
-## If TARGET_ARCH is the same string as ARCH,
-## then only ARCH will be used for fetch
-ARCH?=		${:! uname -m !}
+## If TARGET_ARCH is the same string as TARGET,
+## then only TARGET will be used for fetch
+TARGET?=	${:! uname -m !}
 TARGET_ARCH?=	${:! uname -p !}
 
 ##
@@ -49,19 +57,22 @@ TARGET_ARCH?=	${:! uname -p !}
 DESTDIR?=	/mnt
 
 ##
-## base directory for any release-specific dist directories
+## base directory for any release-specific distfile directories
 ##
 .ifndef CACHEROOT
 CACHEROOT:=	${.CURDIR}/distcache
 .endif
 
-.if "${ARCH}" == "${TARGET_ARCH}"
-CACHE_PKGDIR=	${CACHEROOT}/${DISTRIBUTOR}_${FETCH_REL}_${ARCH}
-.else
-CACHE_PKGDIR=	${CACHEROOT}/${DISTRIBUTOR}_${FETCH_REL}_${ARCH}_${TARGET_ARCH}
+.ifndef CACHE_PKGDIR
+. if "${TARGET}" == "${TARGET_ARCH}"
+CACHE_PKGDIR=	${CACHEROOT}/${DISTRIBUTOR}_${FETCH_REL}_${TARGET}
+. else
+CACHE_PKGDIR=	${CACHEROOT}/${DISTRIBUTOR}_${FETCH_REL}_${TARGET}_${TARGET_ARCH}
+. endif
 .endif
 
-## extract directory for src.txz, used with etcupdate during upgrade.
+## base directory for temporary src.txz extract,
+## used with etcupdate during upgrade [FIXME if no etcupdate.tar.gz]
 ##
 ## this directory can be removed with the clean-src tgt
 SRC_DESTDIR?=	${CACHE_PKGDIR}/source
@@ -71,24 +82,46 @@ SRC_DESTDIR?=	${CACHE_PKGDIR}/source
 ## See also: FreeBSD /usr/src/release/scripts/make-manifest.sh
 DISTSUM?=	sha256
 
+## DESTDIR => DESTDIR_DIR
 .if empty(DESTDIR) || ( empty(DESTDIR:T) && "${DESTDIR:H}" == "." )
 DESTDIR_DIR=	/
 .else
 DESTDIR_DIR=	${DESTDIR:C@/+$@@}/
 .endif
 
-.if "${TARGET_ARCH}" != "${ARCH}"
-FETCH_BASE?=	${MIRROR}/releases/${ARCH}/${TARGET_ARCH}/${FETCH_REL}
+## additional config for cache dir
+.if "${TARGET_ARCH}" != "${TARGET}"
+FETCH_BASE?=	${MIRROR}/releases/${TARGET}/${TARGET_ARCH}/${FETCH_REL}
 .else
-FETCH_BASE?=	${MIRROR}/releases/${ARCH}/${FETCH_REL}
+FETCH_BASE?=	${MIRROR}/releases/${TARGET}/${FETCH_REL}
 .endif
 
+## sudo wrapper, if make is not run as root
 EUID=	${:! id -u !}
 .if "${EUID}" == "0"
 SU_RUN=		# Empty
 .else
 SU_RUN=		${SUDO:Usudo}
 .endif
+
+##
+## Configuration for install
+##
+
+## Directories that should exist with an 'schg' flag under DESTDIR.
+##
+## These would typically be listed as such under at least one file
+## in the installation's etc/mtree/BSD.*.dist files. These will be
+## listed manually here, to simplify the task of parsing those files.
+##
+## For directories with an schg flag, this may not typically be handled
+## under etcupdate or generic tar cmds, and will be handled below
+## in make(install). The flag will be cleared manually before installing
+## base.txz. The schg flag should be set again during the mtree handling
+## as according to the dist configuration
+SCHG_DIRS?=	var/empty
+
+ETCUPDATE?=	etcupdate
 
 ##
 ## Selection of distribution packages for fetch
@@ -119,7 +152,11 @@ SU_RUN=		${SUDO:Usudo}
 ##   kernel, or lib32 in FETCH_PKG
 ##
 ## * NO_FETCH : If defined, wget will not be run to fetch any FETCH_PKG or dist metadata
-FETCH_PKG?=	base kernel lib32
+FETCH_PKG?=	base kernel
+
+.ifndef NO_MULTILIB
+FETCH_PKG+=	lib32
+.endif
 
 .if defined(SRC) || !empty(FETCH_PKG:Mbase)
 . if !empty(FETCH_PKG:Msrc) && defined(SRC)
@@ -139,6 +176,12 @@ FETCH_PKG+=	tests
 .ifdef DEBUG
 FETCH_PKG:=	${FETCH_PKG} ${FETCH_PKG:Nsrc:Nports:Ntests:@.P.@${.P.}-dbg@}
 .endif
+
+
+.for P in ${FETCH_PKG}
+ARCHIVE_PATH.${P}?= ${CACHE_PKGDIR}/${P}.txz
+.endfor
+
 
 FETCH_META?=	MANIFEST REVISION GITBRANCH BUILDDATE
 
@@ -179,19 +222,19 @@ fetch:		.PHONY ${ALL_FETCH}
 
 check:		.PHONY ${ALL_FETCH}
 .for P in ${FETCH_PKG}
-	@( ORIGSUM=$$(awk -v "P=${F}" '$$1 == "${P}.txz" { print $$2 }' ${CACHE_PKGDIR}/MANIFEST); \
-	HERESUM=$$(${DISTSUM} ${CACHE_PKGDIR}/${P}.txz | awk '{ print $$4 }'); \
-		if [ "$${ORIGSUM}" = "$${HERESUM}" ]; then \
-			echo "#-- File matched checksum: ${P}.txz"; else \
-			echo "#-- File check failed: ${P}.txz (expected $${ORIGSUM} received $${HERESUM})" 1>&2; false; \
-		fi )
+	@(if ! [ -e "${ARCHIVE_PATH.${P}}" ]; then echo "File not found (make fetch?): ${ARCHIVE_PATH.${P}}"; false; fi)
+	@echo "#-- Checking ${P}.txz checksum" 1>&2
+	@(set -e; ORIGSUM=$$(awk 'BEGIN {EX = 1} \
+		$$1 == "${P}.txz" { print $$2; EX=0} \
+		END { if (EX != 0) { print "${P}.txz not found in manifest ${CACHE_PKGDIR}/MANIFEST"; exit 1; }}' ${CACHE_PKGDIR}/MANIFEST); \
+		${DISTSUM} -c "$${ORIGSUM}" ${ARCHIVE_PATH.${P}} >/dev/null )
 .endfor
 
 clean-cache: .PHONY clean-src
 	if [ -e "${CACHE_PKGDIR}" ]; then \
-		echo "#-- Removing distribution files in ${CACHE_PKGDIR}"; \
-		rm -f ${FETCH_PKG:@P@${CACHE_PKGDIR}/${P}.txz@}; \
-		rm -f ${FETCH_META:@F@${CACHE_PKGDIR}/${F}@}; \
+	  echo "#-- Removing distribution files in ${CACHE_PKGDIR}" 1>&2; \
+	  rm -f ${FETCH_PKG:@P@${CACHE_PKGDIR}/${P}.txz@}; \
+	  rm -f ${FETCH_META:@F@${CACHE_PKGDIR}/${F}@}; \
 	fi
 
 ##
@@ -207,65 +250,117 @@ unpack-src:	.PHONY ${SRC_DESTDIR} ${CACHE_PKGDIR}/src.txz
 	tar -C ${SRC_DESTDIR} -Jxf ${CACHE_PKGDIR}/src.txz
 
 clean-src:	.PHONY
-	@echo "#-- Removing local source directory ${SRC_DESTDIR}"
+	@echo "#-- Removing local source directory ${SRC_DESTDIR}" 1>&2
 	rm -rf ${SRC_DESTDIR}
 
-.if exists(${DESTDIR_DIR}usr/lib/libc.so) || exists(${DESTDIR_DIR}usr/lib/libc.a)
-## Assumption: This installation will update an existing installation
-etcupdate-pre: .PHONY unpack-src .USEBEFORE
-	${SU_RUN} etcupdate -p -I "${ETCUPDATE_IGNORE}" -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src || \
-	${SU_RUN} etcupdate resolve -p -I "${ETCUPDATE_IGNORE}" -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src
-etcupdate-post: .PHONY etcupdate-pre .USE
-	${SU_RUN} etcupdate -I "${ETCUPDATE_IGNORE}" -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src || \
-	${SU_RUN} etcupdate resolve -I "${ETCUPDATE_IGNORE}" -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src
-.else
-## new installation - ensure an etcupdate db is created for destdir
-etcupdate-pre: .PHONY unpack-src .USEBEFORE
+## NB this is somewhat redundant as it requires that etcupdate is run
+## to build etcupdate.tar.gz while it will be run for install
+## on the actual unpacked src.txz
+## - FIXME src.txz no longer required here, if etcupdate.tar.gz and old.inc are available
+${CACHE_PKGDIR}/etcupdate.tar.gz: unpack-src ## FIXME use build stamps to prevent repetitive untgz
+	WRK=$$(mktemp -d ${TMPDIR:U/tmp}/etcupdate_wrk.${.MAKE.PID}XXXXXX.d); \
+	${SU_RUN} ${ETCUPDATE} build -d $${WRK} -s ${SRC_DESTDIR}/usr/src $@; \
+	rm -f $${WRK}/log; rmdir $${WRK}
+
+## Produce a list of files to exclude when extracting base.txz,
+## thus preventing overwrite of ${DESTDIR}/etc/master.passwd if the file exists.
+## This is used together with etcupdate after install
+${CACHE_PKGDIR}/etcupdate.files: ${CACHE_PKGDIR}/etcupdate.tar.gz
+	tar -tf ${CACHE_PKGDIR}/etcupdate.tar.gz | grep -v '/$$' > $@
+
+## OLD_(DIRS, LIBS, FILES)
+##
+## This will extract variables in a syntax compatible with sh(1),
+## for sh(1) source (.) during make install
+##
+## The mk-source variables would be bound for some specific make tgts
+## in SRCTOP/Makefile.inc1
+${CACHE_PKGDIR}/old.inc: unpack-src
+	${MAKE} -C ${SRC_DESTDIR}/usr/src -f ${SRC_DESTDIR}/usr/src/Makefile.inc1 \
+		-V 'OLD_DIRS=$${OLD_DIRS:Q}' -V 'OLD_FILES=$${OLD_FILES:Q}' \
+		-V 'OLD_LIBS=$${OLD_LIBS:Q}' \
+		TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} check-old  > $@
+
+##
+## conditional etcupdate tooling for a base system update
+## or new base system installation
+##
+.if !empty(FETCH_PKG:Mbase)
+. if exists(${DESTDIR_DIR}usr/lib/libc.so) || exists(${DESTDIR_DIR}usr/lib/libc.a)
+INSTALL_UPDATE=	Defined
+## updating an existing installation with a new base.txz (post-install only)
+##
+## this will be run at the end of make install
+etcupdate-post: .PHONY unpack-src .USE
+## run twice if it fails initially, in post-update.
+## terminate with || true on the first call.
+	${SU_RUN} ${ETCUPDATE} ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src || \
+	${SU_RUN} ${ETCUPDATE} resolve ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src || true
+	${SU_RUN} ${ETCUPDATE} resolve ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src
+. else
+## assumption: This is a new installation, with no libc under destdir.
+## no config check; etcupdte extract in post
 etcupdate-post: .PHONY unpack-src .USE
 	${SU_RUN} etcupdate extract -D ${DESTDIR_DIR} -s ${SRC_DESTDIR}/usr/src
+. endif
 .endif
 
-install: 	.PHONY check ${DESTDIR_DIR} etcupdate-pre etcupdate-post
+
+install: .PHONY check ${DESTDIR_DIR} etcupdate-post ${CACHE_PKGDIR}/old.inc ${CACHE_PKGDIR}/etcupdate.files
 ## clear known fflags on dirs, if base.txz will be installed
-.if !empty(FETCH_PKG:Mbase)
-	if [ -e ${DESTDIR_DIR}var/empty ]; then ${SU_RUN} chflags noschg ${DESTDIR_DIR}var/empty; fi
+.if !empty(FETCH_PKG:Mbase) && defined(INSTALL_UPDATE)
+. for D in ${SCHG_DIRS}
+	if [ -e ${DESTDIR_DIR}${D} ]; then ${SU_RUN} chflags noschg ${DESTDIR_DIR}${D}; fi
+. endfor
+## extract base.txz
+	@echo "#-- installing base system" 1>&2
+	${SU_RUN} tar -C ${DESTDIR_DIR}  --clear-nochange-fflags --fflags \
+		 -Jxf ${ARCHIVE_PATH.base} -X ${CACHE_PKGDIR}/etcupdate.files
 .endif
-.for P in ${FETCH_PKG:Nsrc}
-	${SU_RUN} tar --clear-nochange-fflags --fflags -Jxf ${CACHE_PKGDIR}/${P}.txz -C ${DESTDIR_DIR}
+## extract *.txz other than base, src (i.e kernel, lib32, ports, test)
+.for P in ${FETCH_PKG:Nsrc:Nbase}
+	@echo "#-- installing ${P}" 1>&2
+	${SU_RUN} tar -C ${DESTDIR_DIR} --clear-nochange-fflags --fflags \
+		 -Jxf ${ARCHIVE_PATH.${P}}
 .endfor
+## install src
 .if defined(INSTALL_SRC)
-	${SU_RUN} tar --clear-nochange-fflags --fflags -Jxf ${CACHE_PKGDIR}/src.txz -C ${DESTDIR_DIR}
+	@echo "#-- installing src" 1>&2
+	${SU_RUN} tar -C ${DESTDIR_DIR} --clear-nochange-fflags --fflags \
+		 -Jxf ${ARCHIVE_PATH.src}
 .endif
-## applying mtree files with original metadata (noschg, other)
+## update file metadata and system config (new installation and/or update)
+##
+## etcupdate will be run after make install complete
 .if !empty(FETCH_PKG:Mbase)
+## set all fflags, file permissions, times per mtree metadata as installed
+	echo "#-- mtree : var/db/mergemaster.mtree" 1>&2
 	${SU_RUN} mtree -iUte -p ${DESTDIR_DIR} -f ${DESTDIR_DIR}var/db/mergemaster.mtree
 	for DIRTREE in ${DESTDIR_DIR}etc/mtree/BSD.*.dist; do \
 		NAME=$$(basename $${DIRTREE} | sed 's@.*\.\(.*\)\..*@\1@'); \
-		case $${NAME} in (root|sendmail) REALDIR= ;; (lib32|include) REALDIR=usr ;; \
+		case $${NAME} in (root|sendmail) REALDIR= ;; (lib32|include) REALDIR=usr;; \
 		(debug) if ! ${DEBUG:Dtrue:Ufalse}; then continue; else REALDIR=usr/lib; fi;; \
 		(tests) REALDIR=usr/tests;; (*) REALDIR=$${NAME};; esac; \
-		if [ -e ${DESTDIR_DIR}${REALDIR} ]; then echo "#-- $${REALDIR}"; \
+		if [ -e ${DESTDIR_DIR}${REALDIR} ]; then echo "#-- mtree : $${NAME} @ $${REALDIR}"; \
 		${SU_RUN} mtree -iUte -p ${DESTDIR_DIR}${REALDIR} -f $${DIRTREE}; fi; \
 	done
-	if [ -e ${DESTDIR_DIR}etc/master.passwd ]; then \
-		${SU_RUN} pwd_mkdb -d ${DESTDIR_DIR}etc -p ${DESTDIR_DIR}etc/master.passwd; fi
+. if defined(INSTALL_UPDATE)
+## clean old files/libs and old dirs, using metadata from the corresponding source tree
+	echo "#-- cleaning old files/libs in ${DESTDIR_DIR}" 1>&2
+	. ${CACHE_PKGDIR}/old.inc; \
+	for F in $${OLD_FILES} $${OLD_LIBS}; do \
+	if test -e ${DESTDIR_DIR}$${F}; then \
+	  ${SU_RUN} chflags noschg ${DESTDIR_DIR}$${F} || echo "#-- (chflags exited $$?) unable to modify file flags: ${DESTDIR_DIR}$${F}" 1>&2; \
+	  ${SU_RUN} rm -fv ${DESTDIR_DIR}$${F} || echo "#-- (rm exited $$?) unable to remove file: ${DESTDIR_DIR}$${F}" 1>&2; \
+	fi; done
+	echo "#-- cleaning old dirs in ${DESTDIR_DIR}" 1>&2; \
+	. ${CACHE_PKGDIR}/old.inc; \
+	for D in $${OLD_DIRS}; do \
+	if [ -d ${DESTDIR_DIR}$${D} ]; then \
+	  if [ $$(stat -f '%l' ${DESTDIR_DIR}$${D}) -le 2 ]; then \
+		  ${SU_RUN} chflags noschg ${DESTDIR_DIR}$${D} || echo "#-- (chflags exited $$?) unable to modify dir flags: ${DESTDIR_DIR}$${D}" 1>&2; \
+		  ${SU_RUN} rmdir -v ${DESTDIR_DIR}$${D} || echo "#-- (rmdir exited $$?) rmdir failed: ${DESTDIR_DIR}$${D}" 1>&2; \
+	  else echo "#--- directory not empty, not removing: ${DESTDIR_DIR}$${D}" 1>&2; \
+	fi; fi; done
+. endif
 .endif
-
-## destroy-destdir: Destructive tgt, unset schg flags and remove files in DESTDIR_DIR
-##
-## This destructive tgt may be run in a separate make process for a specific
-## DESTDIR, before any later make process that would install with the same DESTDIR.
-##
-## If this tgt would be run for an existing installation under DESTDIR, and run previous
-## to make install in the same process,, then the installation tgts may handle the
-## installationas an upgrade wile there may not not be a filesystem for upgrade onced
-## the install tgt is reached.
-##
-## No Warranty.
-##
-destroy-destdir:
-	if [ "${DESTDIR_DIR}" = "/" ]; then echo "#-- Aborting - Not destroying /"; false; else \
-		echo "#-- Removing files and directories in ${DESTDIR_DIR}"; \
-		${SU_RUN} find ${DESTDIR_DIR} -maxdepth 1 -mindepth 1 -exec chflags -R noschg {} +; \
-		${SU_RUN} find ${DESTDIR_DIR} -maxdepth 1 -mindepth 1 -exec rm -rf {} +; \
-	fi
