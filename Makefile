@@ -404,6 +404,8 @@ ${STAMP.etcupdate-post}: ${ETCUPDATE_ARCHIVE} .USE
 EXTRACT_SKIP_LIST?=		${CACHE_PKGDIR}/etcupdate.files
 .endif
 
+KERNEXT.boot/kernel=			# Empty
+KERNEXT.usr/lib/debug/boot/kernel= 	.debug
 
 install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_SKIP_LIST}
 ## clear known fflags on dirs, if base.txz will be installed
@@ -421,17 +423,17 @@ install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_
 .if defined(INSTALL_KERNEL)
 ## perform some checks & backup
 . for D in boot/kernel usr/lib/debug/boot/kernel
-.  if exists(${DESTDIR_DIR}${D}/kernel)
-.   if exists(${DESTDIR_DIR}${D}.old/kernel)
+.  if exists(${DESTDIR_DIR}${D}/kernel${KERNEXT.${D}})
+.   if exists(${DESTDIR_DIR}${D}.old/kernel${KERNEXT.${D}})
 ## move any previous kernel.old dir to kernel.old.<LAST_MODIFIED_EPOCH>
-	@(OLDSTAMP=$$(stat -f '%m' ${DESTDIR_DIR}${D}.old/kernel); \
+	@(OLDSTAMP=$$(stat -f '%m' ${DESTDIR_DIR}${D}.old/kernel${KERNEXT.${D}}); \
 	  OLDDIR=${DESTDIR_DIR}${D}.old.$${OLDSTAMP}; \
-	  echo "#-- moving previous kernel.old => $${OLDDIR}"; \
+	  echo "#-- moving earlier ${D:H}/kernel.old => $${OLDDIR}"; \
 	  ${SU_RUN} mv -v ${DESTDIR_DIR}${D}.old $${OLDDIR}; \
 	)
 .   endif
 ## move any existing kernel dir to kernel.old
-	@echo "#-- storing previous kernel as kernel.old : ${DESTDIR_DIR}${D}.old"
+	@echo "#-- storing previous ${D:H}/kernel as kernel.old : ${DESTDIR_DIR}${D}.old"
 	${SU_RUN} mv -v ${DESTDIR_DIR}${D} ${DESTDIR_DIR}${D}.old
 .  endif
 . endfor
