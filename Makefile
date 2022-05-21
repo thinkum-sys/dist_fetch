@@ -467,8 +467,8 @@ install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_
 		case $${NAME} in (root|sendmail) REALDIR= ;; (lib32|include) REALDIR=usr;; \
 		(debug) if ! ${DEBUG:Dtrue:Ufalse}; then continue; else REALDIR=usr/lib; fi;; \
 		(tests) REALDIR=usr/tests;; (*) REALDIR=$${NAME};; esac; \
-		if [ -e ${DESTDIR_DIR}${REALDIR} ]; then echo "#-- mtree : $${NAME} $${REALDIR}"; \
-		${SU_RUN} mtree -iUte -p ${DESTDIR_DIR}${REALDIR} -f $${DIRTREE}; fi; \
+		if [ -e ${DESTDIR_DIR}$${REALDIR} ]; then echo "#-- mtree : $${NAME} $${REALDIR}"; \
+		${SU_RUN} mtree -iUte -p ${DESTDIR_DIR}$${REALDIR} -f $${DIRTREE}; fi; \
 	done)
 ## clean old files/libs and old dirs, using metadata from the corresponding source tree
 	@echo "#-- cleaning old libraries and files in ${DESTDIR_DIR}" 1>&2
