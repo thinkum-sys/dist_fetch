@@ -433,7 +433,7 @@ install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_
 . endif
 .endif
 ## extract *.txz other than base, src (e.g kernel, lib32, ports, test)
-.for P in ${FETCH_PKG:Nsrc:Nbase:Nkernel}
+.for P in ${FETCH_PKG:Nsrc:Nbase}
 	@echo "#-- installing ${P}" 1>&2
 	${SU_RUN} tar -C ${DESTDIR_DIR} --clear-nochange-fflags --fflags \
 		 -Jxf ${ARCHIVE_PATH.${P}}
