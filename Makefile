@@ -213,7 +213,7 @@ WGET_ARGS?=	--timeout=15
 ##
 ##   All files must exist locally if 'install' is run with NO_FETCH defined
 ##
-FETCH_PKG?=	base
+FETCH_PKG?=	base kernel
 
 .if defined(INSTALL_KERNEL)
 FETCH_PKG+=	kernel
@@ -299,14 +299,16 @@ ${STAMP.fetch}:		${ALL_FETCH}
 	@touch $@
 
 ${STAMP.check}: 	${ALL_FETCH}
-.for P in ${FETCH_PKG}
+.if !defined(NO_CHECK)
+. for P in ${FETCH_PKG}
 	@(if ! [ -e "${ARCHIVE_PATH.${P}}" ]; then echo "File not found (make fetch?): ${ARCHIVE_PATH.${P}}" 1>&2; false; fi)
 	@echo "#-- Checking ${P}.txz checksum" 1>&2
 	@(set -e; ORIGSUM=$$(awk 'BEGIN {EX = 1} \
 		$$1 == "${P}.txz" { print $$2; EX=0} \
 		END { if (EX != 0) { print "${P}.txz not found in manifest ${CACHE_PKGDIR}/MANIFEST"; exit 1; }}' ${CACHE_PKGDIR}/MANIFEST); \
 		${DISTSUM} -c "$${ORIGSUM}" ${ARCHIVE_PATH.${P}} >/dev/null )
-.endfor
+. endfor
+.endif
 	@touch $@
 
 clean-cache: 		.PHONY clean-src
@@ -416,21 +418,23 @@ install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_
 	${SU_RUN} tar -C ${DESTDIR_DIR}  --clear-nochange-fflags --fflags \
 		 -Jxf ${ARCHIVE_PATH.base} ${INSTALL_UPDATE:D-X ${EXTRACT_SKIP_LIST}}
 .endif
-.if defined(INSTALL_KERNEL) && defined(INSTALL_UPDATE)
+.if defined(INSTALL_KERNEL)
 ## perform some checks & backup
-. if exists(${DESTDIR_DIR}boot/kernel/kernel)
-.  if exists(${DESTDIR_DIR}boot/kernel.old/kernel)
+. for D in boot/kernel usr/lib/debug/boot/kernel
+.  if exists(${DESTDIR_DIR}${D}/kernel)
+.   if exists(${DESTDIR_DIR}${D}.old/kernel)
 ## move any previous kernel.old dir to kernel.old.<LAST_MODIFIED_EPOCH>
-	@(OLDSTAMP=$$(stat -f '%m' ${DESTDIR_DIR}boot/kernel.old/kernel); \
-	  OLDDIR=${DESTDIR_DIR}boot/kernel.old.$${OLDSTAMP}; \
+	@(OLDSTAMP=$$(stat -f '%m' ${DESTDIR_DIR}${D}.old/kernel); \
+	  OLDDIR=${DESTDIR_DIR}${D}.old.$${OLDSTAMP}; \
 	  echo "#-- moving previous kernel.old => $${OLDDIR}"; \
-	  ${SU_RUN} mv -v ${DESTDIR_DIR}boot/kernel.old $${OLDDIR}; \
+	  ${SU_RUN} mv -v ${DESTDIR_DIR}${D}.old $${OLDDIR}; \
 	)
-.  endif
+.   endif
 ## move any existing kernel dir to kernel.old
-	@echo "#-- storing previous kernel as kernel.old"
-	${SU_RUN} mv -v ${DESTDIR_DIR}boot/kernel ${DESTDIR_DIR}boot/kernel.old
-. endif
+	@echo "#-- storing previous kernel as kernel.old : ${DESTDIR_DIR}${D}.old"
+	${SU_RUN} mv -v ${DESTDIR_DIR}${D} ${DESTDIR_DIR}${D}.old
+.  endif
+. endfor
 .endif
 ## extract *.txz other than base, src (e.g kernel, lib32, ports, test)
 .for P in ${FETCH_PKG:Nsrc:Nbase}
