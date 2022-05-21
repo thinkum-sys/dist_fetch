@@ -35,7 +35,7 @@
 ##
 ## release name for fetch from distribution site
 ##
-FETCH_REL?=	13.1-RC6
+FETCH_REL?=	13.1-RELEASE
 
 ##
 ## distributor name, distribution site
@@ -96,6 +96,19 @@ FETCH_BASE?=	${MIRROR}/releases/${TARGET}/${TARGET_ARCH}/${FETCH_REL}
 FETCH_BASE?=	${MIRROR}/releases/${TARGET}/${FETCH_REL}
 .endif
 
+.ifndef SRCCONF
+## use src.conf provided with the build if available
+## - must be available locally, will not be fetched here
+## - not typically available with official releases
+## - if not available, use SRCCONF=/dev/null
+. ifdef exists(${CACHE_PKGDIR}/src.conf)
+SRCCONF=	${CACHE_PKGDIR}/src.conf
+. else
+SRCCONF=	/dev/null
+. endif
+.endif
+
+
 ## sudo wrapper, if make is not run as root
 EUID=	${:! id -u !}
 .if "${EUID}" == "0"
@@ -109,11 +122,11 @@ STAMPDIR:=	${.CURDIR}
 .endif
 
 ##
-## using build-stamp file for ensuring that generally .EXEC tgts
+## using build-stamp files for ensuring that symbolic tgts
 ## will not be run under every make, if completed successfully
-## in some previous run.
+## in some previous make
 ##
-## this is not supported for the instalt tgt
+## the install tgt will not be provided with a build-stamp here
 ##
 STAMP_TGTS=	fetch check unpack-src etcupdate-post
 .for T in ${STAMP_TGTS}
@@ -141,6 +154,8 @@ SCHG_DIRS?=	var/empty
 
 ETCUPDATE?=	etcupdate
 
+WGET_ARGS?=	--timeout=15
+
 ##
 ## Selection of distribution packages for fetch
 ##
@@ -152,32 +167,67 @@ ETCUPDATE?=	etcupdate
 ## INSTALL_SRC has been defined in the makefile environment or if src
 ## was initially specified in FETCH_PKG.
 ##
-## Variables used here:
+## Variables that will affect installation, if defined
 ##
-## * FETCH_PKG : List of distribution packages to install, without *.txz suffix
+## FETCH_PKG
+##   List of distribution packages to install
+##
+##   Each element in this list should be provided without *.txz suffix
+##
 ##   Default value does not include src, ports, or tests
 ##
-## * SRC: If defined, then fetch and install the source pkg
+##   e.g for a full installation
 ##
-## * INSTALL_SRC : If defined, then install the source pkg.
+##   FETCH_PKG=  kernel base lib32 src
+##   SRC= defined
+##
+## SRC
+##   If defined, then fetch and install the source pkg
+##
+##   The source package may be fetched and unpacked separately
+##   if needed for base system installation, unless NO_FETCH
+##
+## INSTALL_KERNEL
+##   If defined, then fetch and install the kernel pkg.
+##
+##   Will be set automatically if FETCH_PKG includes 'kernel'
+##
+## INSTALL_SRC
+##   If defined, then fetch and install the source pkg.
+##
 ##   Should be used with SRC defined or src in FETCH_PKG
 ##
-## * PORTS : If defined, then fetch and install the ports tree from ports.txz
+## PORTS
+##   If defined, then fetch and install the ports tree from ports.txz
 ##
-## * TESTS : If defined, then fetch and install tests.txz from the dist site
+## TESTS
+##   If defined, then fetch and install tests.txz from the dist site
 ##
-## * DEBUG : If defined, then fetch and install debug packages for any base,
+## DEBUG
+##   If defined, then fetch and install debug packages for any base,
+##
 ##   kernel, or lib32 in FETCH_PKG
 ##
-## * NO_FETCH : If defined, wget will not be run to fetch any FETCH_PKG or dist metadata
-FETCH_PKG?=	base kernel
+## NO_FETCH
+##   If defined, wget will not be run to fetch any files
+##
+##   All files must exist locally if 'install' is run with NO_FETCH defined
+##
+FETCH_PKG?=	base
+
+.if defined(INSTALL_KERNEL)
+FETCH_PKG+=	kernel
+.elif !empty(FETCH_PKG:Mkernel)
+INSTALL_KERNEL=	FETCH_PKG
+.endif
 
 .ifndef NO_MULTILIB
 FETCH_PKG+=	lib32
 .endif
 
+
 .if defined(SRC) || !empty(FETCH_PKG:Mbase)
-. if !empty(FETCH_PKG:Msrc) && defined(SRC)
+. if defined(SRC)
 INSTALL_SRC=	Defined
 . endif
 FETCH_PKG+=	src
@@ -226,20 +276,20 @@ ${CACHE_PKGDIR}:
 
 .for P in ${FETCH_PKG}
 ALL_FETCH+=		${ARCHIVE_PATH.${P}}
-${ARCHIVE_PATH.${P}}: 	${ALL_FETCH_META} ${CACHE_PKGDIR} .PRECIOUS
+${ARCHIVE_PATH.${P}}: 	${ALL_FETCH_META} ${CACHE_PKGDIR} .PRECIOUS .EXEC
 . ifndef NO_FETCH
 	if [ -e $@ ]; then chmod +w $@; fi
-	wget -O $@ -c ${FETCH_ORIGIN.${P}}
+	wget -O $@ ${WGET_ARGS} -c ${FETCH_ORIGIN.${P}}
 	chmod -w $@
 . endif
 .endfor
 
 .for F in ${FETCH_META}
-all_FETCH_META+=	${ARCHIVE_PATH.${F}}
-${ARCHIVE_PATH.${F}}: 	${CACHE_PKGDIR} .PRECIOUS
+ALL_FETCH_META+=	${ARCHIVE_PATH.${F}}
+${ARCHIVE_PATH.${F}}: 	${CACHE_PKGDIR} .PRECIOUS .EXEC
 . ifndef NO_FETCH
 	if [ -e $@ ]; then chmod +w $@; fi
-	wget -O $@ -c ${FETCH_ORIGIN.${F}}
+	wget -O $@ ${WGET_ARGS} -c ${FETCH_ORIGIN.${F}}
 	chmod -w $@
 . endif
 .endfor
@@ -276,12 +326,13 @@ ${SRC_DESTDIR}:
 	mkdir -p ${.TARGET}
 
 ${STAMP.unpack-src}:	${STAMP.check} ${SRC_DESTDIR} ${CACHE_PKGDIR}/src.txz
+	@echo "#-- Unpacking src.txz to local storage: ${SRC_DESTDIR}" 1>&2
 	tar -C ${SRC_DESTDIR} -Jxf ${CACHE_PKGDIR}/src.txz
 	@touch $@
 
 clean-src:		.PHONY
-	@echo "#-- Removing local source directory ${SRC_DESTDIR}" 1>&2
-	rm -rf ${SRC_DESTDIR}
+	@echo "#-- Removing local source directory ${SRC_DESTDIR}/usr/src" 1>&2
+	rm -rf ${SRC_DESTDIR}/usr/src
 
 ## NB this is somewhat redundant as it requires that etcupdate is run
 ## to build etcupdate.tar.gz while it will be run for install
@@ -289,7 +340,8 @@ clean-src:		.PHONY
 ## - FIXME src.txz no longer required here, if etcupdate.tar.gz and old.inc are available
 ${ETCUPDATE_ARCHIVE}: ${STAMP.unpack-src}
 	WRK=$$(mktemp -d ${TMPDIR:U/tmp}/etcupdate_wrk.${.MAKE.PID}XXXXXX.d); \
-	${SU_RUN} ${ETCUPDATE} build -d $${WRK} -s ${SRC_DESTDIR}/usr/src $@; \
+	${SU_RUN} ${ETCUPDATE} build -d $${WRK} -s ${SRC_DESTDIR}/usr/src \
+	-M SRCCONF=${SRCCONF} -M TARGET=${TARGET} -M TARGET_ARCH=${TARGET_ARCH}  $@; \
 	rm -f $${WRK}/log; rmdir $${WRK}
 
 ## Produce a list of files to exclude when extracting base.txz,
@@ -305,11 +357,13 @@ ${CACHE_PKGDIR}/etcupdate.files: ${ETCUPDATE_ARCHIVE}
 ##
 ## The mk-source variables would be bound for some specific make tgts
 ## in SRCTOP/Makefile.inc1
-${CACHE_PKGDIR}/old.inc: ${STAMP.unpack-src}
+${CACHE_PKGDIR}/old.inc: ${STAMP.unpack-src} ${SRCCONF}
 	${MAKE} -C ${SRC_DESTDIR}/usr/src -f ${SRC_DESTDIR}/usr/src/Makefile.inc1 \
 		-V 'OLD_DIRS=$${OLD_DIRS:Q}' -V 'OLD_FILES=$${OLD_FILES:Q}' \
-		-V 'OLD_LIBS=$${OLD_LIBS:Q}' \
+		-V 'OLD_LIBS=$${OLD_LIBS:Q}' SRCCONF=${SRCCONF} SRCTOP=${SRC_DESTDIR}/usr/src \
 		TARGET=${TARGET} TARGET_ARCH=${TARGET_ARCH} check-old  > $@
+
+old-inc: .PHONY ${CACHE_PKGDIR}/old.inc
 
 ##
 ## conditional etcupdate tooling for a base system update
@@ -317,21 +371,28 @@ ${CACHE_PKGDIR}/old.inc: ${STAMP.unpack-src}
 ##
 .if !empty(FETCH_PKG:Mbase)
 . if exists(${DESTDIR_DIR}usr/lib/libc.so) || exists(${DESTDIR_DIR}usr/lib/libc.a)
+## updating an existing installation with a new base.txz
+
 INSTALL_UPDATE=	Defined
-## updating an existing installation with a new base.txz (post-install only)
-##
+
 ## this will be run at the end of make install
 ${STAMP.etcupdate-post}: ${ETCUPDATE_ARCHIVE} .USE
 ## run twice if it fails initially, in post-update.
 ## terminate with || true on the first call.
+	@echo "#-- etcupdate : ${DESTDIR_DIR}" 1>&2
 	${SU_RUN} ${ETCUPDATE} ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR} -t ${ETCUPDATE_ARCHIVE} || \
 	${SU_RUN} ${ETCUPDATE} resolve ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR} || true
 	${SU_RUN} ${ETCUPDATE} resolve ${ETCUPDATE_IGNORE:D-I ${ETCUPDATE_IGNORE:Q}} -D ${DESTDIR_DIR}
+	@echo "#-- updating pwd.db, spwd.db : ${DESTDIR_DIR}etc" 1>&2
+	pwd_mkdb -d ${DESTDIR_DIR}etc -p ${DESTDIR_DIR}etc/master.passwd
+	@echo "#-- updating login.conf.db : ${DESTDIR_DIR}etc" 1>&2
+	cap_mkdb ${DESTDIR_DIR}etc/login.conf
 . else
 ## assumption: This is a new installation, with no libc under destdir.
 ## no config check; etcupdte extract in post
 ${STAMP.etcupdate-post}: ${ETCUPDATE_ARCHIVE} .USE
 	${SU_RUN} etcupdate extract -D ${DESTDIR_DIR} -t ${ETCUPDATE_ARCHIVE}
+	@echo "#-- etcupdate extracted for ${DESTDIR_DIR}" 1>&2
 . endif
 .endif
 
@@ -350,13 +411,29 @@ install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_
 	if [ -e ${DESTDIR_DIR}${D} ]; then ${SU_RUN} chflags noschg ${DESTDIR_DIR}${D}; fi
 .  endfor
 . endif
-## extract base.txz
+## extract base.txz. If this is an update, files from etcupdate will be excluded
 	@echo "#-- installing base system" 1>&2
 	${SU_RUN} tar -C ${DESTDIR_DIR}  --clear-nochange-fflags --fflags \
 		 -Jxf ${ARCHIVE_PATH.base} ${INSTALL_UPDATE:D-X ${EXTRACT_SKIP_LIST}}
 .endif
-## extract *.txz other than base, src (i.e kernel, lib32, ports, test)
-.for P in ${FETCH_PKG:Nsrc:Nbase}
+.if defined(INSTALL_KERNEL) && defined(INSTALL_UPDATE)
+## perform some checks & backup
+. if exists(${DESTDIR_DIR}boot/kernel/kernel)
+.  if exists(${DESTDIR_DIR}boot/kernel.old/kernel)
+## move any previous kernel.old dir to kernel.old.<LAST_MODIFIED_EPOCH>
+	@(OLDSTAMP=$$(stat -f '%m' ${DESTDIR_DIR}boot/kernel.old/kernel); \
+	  OLDDIR=${DESTDIR_DIR}boot/kernel.old.$${OLDSTAMP}; \
+	  echo "#-- moving previous kernel.old => $${OLDDIR}"; \
+	  ${SU_RUN} mv -v ${DESTDIR_DIR}boot/kernel.old $${OLDDIR}; \
+	)
+.  endif
+## move any existing kernel dir to kernel.old
+	@echo "#-- storing previous kernel as kernel.old"
+	${SU_RUN} mv -v ${DESTDIR_DIR}boot/kernel ${DESTDIR_DIR}boot/kernel.old
+. endif
+.endif
+## extract *.txz other than base, src (e.g kernel, lib32, ports, test)
+.for P in ${FETCH_PKG:Nsrc:Nbase:Nkernel}
 	@echo "#-- installing ${P}" 1>&2
 	${SU_RUN} tar -C ${DESTDIR_DIR} --clear-nochange-fflags --fflags \
 		 -Jxf ${ARCHIVE_PATH.${P}}
@@ -367,17 +444,20 @@ install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_
 	${SU_RUN} tar -C ${DESTDIR_DIR} --clear-nochange-fflags --fflags \
 		 -Jxf ${ARCHIVE_PATH.src}
 .endif
-## update file metadata and system config (new installation and/or update)
+## update file metadata and system config (system update)
 ##
 ## etcupdate will be run after make install complete
-.if !empty(FETCH_PKG:Mbase)
-## set all fflags, file permissions, times per mtree metadata as installed
 ##
-## mtree data is generally handled by etcupdate, so will be skipped during base.txz extract.
-## The files may not be avaialble her for a new installation
-. if defined(INSTALL_UPDATE)
+## If this was run for a new installation, some files used here
+## may not be available at this time, e.g if installed by
+## 'etcupdate extract'
+##
+.if !empty(FETCH_PKG:Mbase) && defined(INSTALL_UPDATE)
+## set all fflags, file permissions, times per mtree metadata as installed
+. if exists(${DESTDIR_DIR}var/db/mergemaster.mtree)
 	@echo "#-- mtree : var/db/mergemaster.mtree" 1>&2
 	${SU_RUN} mtree -iUte -p ${DESTDIR_DIR} -f ${DESTDIR_DIR}var/db/mergemaster.mtree
+. endif
 	@(for DIRTREE in ${DESTDIR_DIR}etc/mtree/BSD.*.dist; do \
 		NAME=$$(basename $${DIRTREE} | sed 's@.*\.\(.*\)\..*@\1@'); \
 		case $${NAME} in (root|sendmail) REALDIR= ;; (lib32|include) REALDIR=usr;; \
@@ -387,9 +467,9 @@ install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_
 		${SU_RUN} mtree -iUte -p ${DESTDIR_DIR}${REALDIR} -f $${DIRTREE}; fi; \
 	done)
 ## clean old files/libs and old dirs, using metadata from the corresponding source tree
-	@echo "#-- cleaning old files/libs in ${DESTDIR_DIR}" 1>&2
+	@echo "#-- cleaning old libraries and files in ${DESTDIR_DIR}" 1>&2
 	@(. ${CACHE_PKGDIR}/old.inc; \
-	for F in $${OLD_FILES} $${OLD_LIBS}; do \
+	for F in $${OLD_LIBS} $${OLD_FILES}; do \
 	if test -e ${DESTDIR_DIR}$${F}; then \
 	  ${SU_RUN} chflags noschg ${DESTDIR_DIR}$${F} || echo "#-- (chflags exited $$?) unable to modify file flags: ${DESTDIR_DIR}$${F}" 1>&2; \
 	  ${SU_RUN} rm -fv ${DESTDIR_DIR}$${F} || echo "#-- (rm exited $$?) unable to remove file: ${DESTDIR_DIR}$${F}" 1>&2; \
@@ -403,6 +483,4 @@ install: .PHONY check ${STAMP.etcupdate-post} ${CACHE_PKGDIR}/old.inc ${EXTRACT_
 		  ${SU_RUN} rmdir -v ${DESTDIR_DIR}$${D} || echo "#-- (rmdir exited $$?) rmdir failed: ${DESTDIR_DIR}$${D}" 1>&2; \
 	  else echo "#--- directory not empty, not removing: ${DESTDIR_DIR}$${D}" 1>&2; \
 	fi; fi; done)
-	@echo "#-- installed to ${DESTDIR_DIR}" 1>&2
-. endif
 .endif
